@@ -17,7 +17,7 @@ npm install -g @opencode-ai/cli
 git clone https://github.com/OddieDank/openisd-mcp
 cd openisd-mcp
 opencode mcp add openisd-mcp -- node /path/to/openisd-mcp/dist/index.js
-opencode run "Diseña una caja vented QB3 para un Dayton ND105-8"
+opencode run "Design a closed box with Qtc 0.707 for the Dayton driver ND105-8 of the library"
 ```
 
 ## Quick start (Claude Desktop)
