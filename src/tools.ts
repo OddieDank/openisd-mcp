@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { searchDrivers, loadDriver, designBox, simulate, resolveDriver, addDriver } from './design.js';
+import { evaluateDesign } from './evaluate.js';
 import type { FriendlyTS, DesignInput, SimulateInput, AddDriverInput } from './design.js';
 
 const tsSchema = z.object({
@@ -122,5 +123,73 @@ export function registerTools(server: McpServer): void {
     const out = addDriver(args as AddDriverInput);
     if (!('file' in out)) return fail(out.issues);
     return ok({ file: out.file, issues: out.issues });
+  });
+
+  server.registerTool('evaluate_design', {
+    description: 'Full design evaluation: runs design_box + simulate + automated PASS/WARN/FAIL checklist in one call. Checks: Qtc/Fb alignment, excursion margin vs Xmax, port velocity/chuffing (Mach ≤5%), F3 extension, SPL limiter, impedance peak, box volume sanity. Returns overall verdict + detailed checks with thresholds.',
+    inputSchema: {
+      driverName: z.string().optional().describe('Library driver file, from search_drivers'),
+      ts: z.object({
+        name: z.string().optional(),
+        Fs: z.number().positive(),
+        Qts: z.number().positive().optional(),
+        Qes: z.number().positive().optional(),
+        Qms: z.number().positive().optional(),
+        Vas_l: z.number().positive(),
+        Sd_cm2: z.number().positive(),
+        Re: z.number().positive(),
+        Le_mH: z.number().positive().optional(),
+        Xmax_mm: z.number().positive().optional(),
+        Pe: z.number().positive().optional(),
+      }).optional().describe('Inline T/S if not using library'),
+      box: z.enum(['sealed', 'vented']),
+      Qtc: z.number().positive().optional().describe('Sealed target Qtc (default 0.707)'),
+      Vb_l: z.number().positive().optional().describe('Vented: override QB3 volume, litres'),
+      Fb: z.number().positive().optional().describe('Vented: override QB3 tuning, Hz'),
+      portDia_mm: z.number().positive().optional().describe('Vented: port diameter, mm'),
+      portLen_mm: z.number().positive().optional().describe('Vented: explicit port length, mm'),
+      Ql: z.number().positive().optional().describe('Leakage loss (default 10)'),
+      eg: z.number().positive().optional().describe('Drive voltage, V (default 2.83)'),
+      nDrivers: z.number().int().positive().optional(),
+      wiring: z.enum(['series', 'parallel']).optional(),
+    },
+  }, async (args) => {
+    const r = resolveDriver(args as { driverName?: string; ts?: FriendlyTS });
+    if (!('driver' in r)) return fail(r.issues);
+
+    // design_box
+    const designInput = {
+      box: args.box,
+      Qtc: args.Qtc,
+      Vb_l: args.Vb_l,
+      Fb: args.Fb,
+      portDia_mm: args.portDia_mm,
+    };
+    const designOut = designBox(r.driver, designInput);
+    if (!('design' in designOut)) return fail(designOut.issues);
+
+    // simulate
+    const simInput = {
+      box: args.box,
+      Vb_l: designOut.design.Vb_l,
+      Ql: args.Ql ?? 10,
+      eg: args.eg ?? 2.83,
+      nDrivers: args.nDrivers,
+      wiring: args.wiring,
+      Fb: designOut.design.Fb,
+      portDia_mm: designOut.design.port?.dia_mm,
+      portLen_mm: designOut.design.port?.len_mm,
+    };
+    const simOut = simulate(r.driver, simInput);
+    if (!('stats' in simOut)) return fail(simOut.issues);
+
+    // evaluate
+    const evalResult = evaluateDesign(r.driver, simOut, designOut.design);
+    return ok({
+      driver: r.ts,
+      design: designOut.design,
+      simulate: { stats: simOut.stats, curve: simOut.curve.slice(0, 10) }, // first 10 pts for context
+      evaluation: { overall: evalResult.overall, summary: evalResult.summary, checks: evalResult.checks },
+    });
   });
 }
