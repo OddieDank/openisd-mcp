@@ -35,7 +35,7 @@ opencode run "Diseña una caja vented QB3 para un Dayton ND105-8"
 }
 ```
 
-Then in Claude: "Diseña una caja sellada Qtc 0.707 para el driver Dayton ND105-8 de la librería".
+Then in Claude: "Design a closed box with Qtc 0.707 for the Dayton driver ND105-8 of the library".
 
 ## Updating the vendored engine
 
