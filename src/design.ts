@@ -6,7 +6,7 @@
  * winisd, unchanged (ARCHITECTURE.md AD-6 litmus test).
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -17,7 +17,7 @@ import {
 import type {
   DriverRaw, Driver, BoxType, SweepParams, SweepResult, MaxCurvesResult, DriverError,
 } from '../vendor/dist/engine/index.js';
-import { Driver as WdrDriver } from '../vendor/dist/winisd/index.js';
+import { Driver as WdrDriver, toWdr } from '../vendor/dist/winisd/index.js';
 
 const DRIVERS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'vendor', 'drivers');
 
@@ -71,10 +71,8 @@ interface IndexEntry {
   Xmax: number | null; Pe: number | null;
 }
 
-let _index: IndexEntry[] | null = null;
 function libraryIndex(): IndexEntry[] {
-  if (!_index) _index = JSON.parse(readFileSync(join(DRIVERS_DIR, 'index.json'), 'utf8'));
-  return _index!;
+  return JSON.parse(readFileSync(join(DRIVERS_DIR, 'index.json'), 'utf8'));
 }
 
 export function searchDrivers(query: string, limit = 10) {
@@ -326,4 +324,37 @@ export function resolveDriver(args: { driverName?: string; ts?: FriendlyTS }):
     return { driver: value, ts: args.ts, issues: errors };   // warns ride along
   }
   return { issues: [{ level: 'error', field: 'driver', message: 'Provide either driverName (from search_drivers) or ts (inline T/S parameters)' }] };
+}
+
+// ---------------------------------------------------------------------------
+// Add a custom driver to the library (writes .wdr, rebuilds index)
+// ---------------------------------------------------------------------------
+
+export interface AddDriverInput extends FriendlyTS {
+  brand?: string;
+  model?: string;
+  comment?: string;
+}
+
+export function addDriver(input: AddDriverInput): { file: string; issues: DriverError[] } | { issues: DriverError[] } {
+  const { value: drv, errors } = deriveDriver(toRaw(input));
+  if (!drv) return { issues: errors };
+  // Build a minimal .wdr via upstream exporter (includes derived params + ParState)
+  const wdrText = toWdr(toRaw(input));
+  const safeName = (input.name || input.model || 'Custom').replace(/[^a-z0-9]+/gi, '_');
+  const file = `custom__${safeName}.wdr`;
+  writeFileSync(join(DRIVERS_DIR, file), wdrText);
+  // Append to index.json so it appears in search immediately
+  const idx = libraryIndex();
+  const newEntry: IndexEntry = {
+    file, name: input.name || input.model || 'Custom',
+    brand: input.brand || '', model: input.model || '',
+    Fs: drv.Fs, Qts: drv.Qts, Qes: drv.Qes, Vas: drv.Vas, Sd: drv.Sd, Re: drv.Re,
+    Xmax: drv.Xmax ?? null, Pe: drv.Pe ?? null,
+  };
+  writeFileSync(join(DRIVERS_DIR, 'index.json'), JSON.stringify([...idx, newEntry]));
+  // Re-verify it loads cleanly
+  const { driver: verify, issues: verifyIssues } = loadDriver(file);
+  if (!verify) return { issues: verifyIssues };
+  return { file, issues: verifyIssues };
 }

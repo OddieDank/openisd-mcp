@@ -6,8 +6,8 @@
  */
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { searchDrivers, loadDriver, designBox, simulate, resolveDriver } from './design.js';
-import type { FriendlyTS, DesignInput, SimulateInput } from './design.js';
+import { searchDrivers, loadDriver, designBox, simulate, resolveDriver, addDriver } from './design.js';
+import type { FriendlyTS, DesignInput, SimulateInput, AddDriverInput } from './design.js';
 
 const tsSchema = z.object({
   name: z.string().optional(),
@@ -98,5 +98,29 @@ export function registerTools(server: McpServer): void {
     const out = simulate(r.driver, args as SimulateInput);
     if (!('stats' in out)) return fail(out.issues);
     return ok({ driver: r.ts, ...out });
+  });
+
+  server.registerTool('add_driver', {
+    description: 'Add a custom driver to the library. Takes T/S params (friendly units), writes a WinISD-compatible .wdr using upstream\'s exporter, and makes it searchable immediately. Returns the library `file` name to use in other tools.',
+    inputSchema: {
+      name: z.string().optional().describe('Display name (used for filename)'),
+      brand: z.string().optional(),
+      model: z.string().optional(),
+      comment: z.string().optional(),
+      Fs: z.number().positive().describe('Resonant frequency, Hz'),
+      Qts: z.number().positive().optional(),
+      Qes: z.number().positive().optional(),
+      Qms: z.number().positive().optional(),
+      Vas_l: z.number().positive().describe('Equivalent compliance volume, litres'),
+      Sd_cm2: z.number().positive().describe('Piston area, cm²'),
+      Re: z.number().positive().describe('DC resistance, ohm'),
+      Le_mH: z.number().positive().optional(),
+      Xmax_mm: z.number().positive().optional(),
+      Pe: z.number().positive().optional().describe('Rated power, W'),
+    },
+  }, async (args) => {
+    const out = addDriver(args as AddDriverInput);
+    if (!('file' in out)) return fail(out.issues);
+    return ok({ file: out.file, issues: out.issues });
   });
 }
