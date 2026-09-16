@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "openisd-mcp": {
+      "command": "npx",
+      "args": ["openisd-mcp"]
+    }
+  }
+}
