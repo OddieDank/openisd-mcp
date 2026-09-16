@@ -29,7 +29,7 @@ All physics comes from the vendored `@openisd/engine` + `@openisd/winisd` (pinne
 **Claude Desktop:** `claude_desktop_config.json` (see below)
 
 Then ask your agent:
-> "Busca drivers Dayton de 10 pulgadas y evalúa una caja sellada Qtc 0.707 para el primero"
+> "Search for 10-inch Dayton drivers and evaluate a sealed box with Qtc 0.707 for the first one"
 
 ### Claude Desktop config
 
