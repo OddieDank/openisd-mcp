@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "openisd-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/openisd-mcp/dist/index.js"]
-    }
-  }
-}
