@@ -12,12 +12,14 @@
     "vendor/dist",
     "vendor/drivers",
     "vendor/fixtures",
-    "OPENISD_SHA"
+    "OPENISD_SHA",
+    "LICENSE"
   ],
   "scripts": {
     "vendor": "bash scripts/vendor.sh",
     "build": "tsc",
     "prepare": "npm run vendor && npm run build",
+    "prepublishOnly": "npm run vendor && npm run build && npm test",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js"
@@ -33,5 +35,22 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OddieDank/openisd-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "openisd",
+    "thiele-small",
+    "loudspeaker",
+    "speaker-design",
+    "audio-engineering"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
