@@ -8,7 +8,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { searchDrivers, loadDriver, designBox, simulate, resolveDriver, addDriver } from './design.js';
 import { evaluateDesign } from './evaluate.js';
-import type { FriendlyTS, DesignInput, SimulateInput, AddDriverInput } from './design.js';
+import type { FriendlyTS, DesignInput, SimulateInput, AddDriverInput, Filter } from './design.js';
 
 const tsSchema = z.object({
   name: z.string().optional(),
@@ -24,6 +24,16 @@ const tsSchema = z.object({
   Pe: z.number().positive().optional().describe('Rated power, W'),
 }).refine(v => [v.Qts, v.Qes, v.Qms].filter(x => x != null).length >= 2,
   { message: 'At least two of Qts/Qes/Qms are required — the third is derived' });
+
+const filterSchema = z.object({
+  type: z.enum(['highpass', 'lowpass', 'linkwitz', 'peaking']).describe('Filter type'),
+  enabled: z.boolean().optional().default(true),
+  fc: z.number().positive().optional().describe('Corner frequency, Hz (highpass/lowpass)'),
+  f0: z.number().positive().optional().describe('Center frequency, Hz (linkwitz/peaking)'),
+  Q: z.number().positive().optional().describe('Quality factor (highpass/lowpass)'),
+  Q0: z.number().positive().optional().describe('Quality factor at f0 (linkwitz)'),
+  gain: z.number().optional().describe('Gain, dB (peaking)'),
+}).describe('Signal-chain filter (HP/LP/Linkwitz transform/parametric EQ)');
 
 const driverRef = {
   driverName: z.string().optional().describe('Library driver file, from search_drivers (e.g. "winisd__Dayton RSS315HFA-8.wdr")'),
@@ -78,7 +88,7 @@ export function registerTools(server: McpServer): void {
   });
 
   server.registerTool('simulate', {
-    description: 'Run the OpenISD Thiele-Small engine on a design: SPL curve (~60 points), F3, Qtc/Fc or Fb, max SPL and its limiter (Xmax vs power), excursion and impedance peaks. Degenerate designs (NaN curves) are rejected before returning.',
+    description: 'Run the OpenISD Thiele-Small engine on a design: SPL curve (~60 points), F3, Qtc/Fc or Fb, max SPL and its limiter (Xmax vs power), excursion and impedance peaks. Degenerate designs (NaN curves) are rejected before returning. Supports HP/LP/Linkwitz/peaking filters for subsonic protection, etc.',
     inputSchema: {
       ...driverRef,
       box: z.enum(['sealed', 'vented']),
@@ -92,6 +102,7 @@ export function registerTools(server: McpServer): void {
       portLen_mm: z.number().positive().optional().describe('Vented: explicit physical port length, mm (Fb then derived)'),
       fmin: z.number().positive().optional(),
       fmax: z.number().positive().optional(),
+      filters: z.array(filterSchema).optional().describe('Filter chain: highpass (subsonic), lowpass, linkwitz transform, peaking EQ'),
     },
   }, async (args) => {
     const r = resolveDriver(args as { driverName?: string; ts?: FriendlyTS });
@@ -126,7 +137,7 @@ export function registerTools(server: McpServer): void {
   });
 
   server.registerTool('evaluate_design', {
-    description: 'Full design evaluation: runs design_box + simulate + automated PASS/WARN/FAIL checklist in one call. Checks: Qtc/Fb alignment, excursion margin vs Xmax, port velocity/chuffing (Mach ≤5%), F3 extension, SPL limiter, impedance peak, box volume sanity. Returns overall verdict + detailed checks with thresholds.',
+    description: 'Full design evaluation: runs design_box + simulate + automated PASS/WARN/FAIL checklist in one call. Checks: Qtc/Fb alignment, excursion margin vs Xmax, port velocity/chuffing (Mach ≤5%), F3 extension, SPL limiter, impedance peak, box volume sanity. Returns overall verdict + detailed checks with thresholds. Supports filters for subsonic protection.',
     inputSchema: {
       driverName: z.string().optional().describe('Library driver file, from search_drivers'),
       ts: z.object({
@@ -152,6 +163,7 @@ export function registerTools(server: McpServer): void {
       eg: z.number().positive().optional().describe('Drive voltage, V (default 2.83)'),
       nDrivers: z.number().int().positive().optional(),
       wiring: z.enum(['series', 'parallel']).optional(),
+      filters: z.array(filterSchema).optional().describe('Filter chain: highpass (subsonic), lowpass, linkwitz transform, peaking EQ'),
     },
   }, async (args) => {
     const r = resolveDriver(args as { driverName?: string; ts?: FriendlyTS });
@@ -179,6 +191,7 @@ export function registerTools(server: McpServer): void {
       Fb: designOut.design.Fb,
       portDia_mm: designOut.design.port?.dia_mm,
       portLen_mm: designOut.design.port?.len_mm,
+      filters: args.filters,
     };
     const simOut = simulate(r.driver, simInput);
     if (!('stats' in simOut)) return fail(simOut.issues);

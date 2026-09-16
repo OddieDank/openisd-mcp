@@ -6,20 +6,44 @@
  * winisd, unchanged (ARCHITECTURE.md AD-6 litmus test).
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import {
   deriveDriver, sweep, maxCurves, classifyFinite,
   ebp, sealedFromQtc, ventedAlignment, ventLength, tuningFromLength,
-  END_CORRECTION,
+  END_CORRECTION, applyFilters,
 } from '../vendor/dist/engine/index.js';
 import type {
-  DriverRaw, Driver, BoxType, SweepParams, SweepResult, MaxCurvesResult, DriverError,
+  DriverRaw, Driver, BoxType, SweepParams, SweepResult, MaxCurvesResult, DriverError, Filter,
 } from '../vendor/dist/engine/index.js';
+export type { Filter };
 import { Driver as WdrDriver, toWdr } from '../vendor/dist/winisd/index.js';
 
-const DRIVERS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'vendor', 'drivers');
+// Stable user data directory (XDG compliant) — survives npx cache purges
+function getDataDir(): string {
+  const base = process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
+  const dir = join(base, 'openisd-mcp');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+const DATA_DIR = getDataDir();
+const DRIVERS_DIR = join(DATA_DIR, 'drivers');
+// Ensure drivers dir exists and seed from vendor on first run
+mkdirSync(DRIVERS_DIR, { recursive: true });
+const VENDOR_DRIVERS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'vendor', 'drivers');
+// Simple file lock for concurrent add_driver calls
+const LOCK_FILE = join(DATA_DIR, '.lock');
+function withLock<T>(fn: () => T): T {
+  // Simple spinlock — good enough for local MCP (single-user, low contention)
+  while (true) {
+    try { writeFileSync(LOCK_FILE, process.pid.toString(), { flag: 'wx' }); break; }
+    catch { /* wait */ }
+  }
+  try { return fn(); } finally { try { writeFileSync(LOCK_FILE, ''); } catch {} }
+}
 
 // ---------------------------------------------------------------------------
 // Agent-facing T/S shape (friendly units) <-> engine DriverRaw (SI)
@@ -72,7 +96,28 @@ interface IndexEntry {
 }
 
 function libraryIndex(): IndexEntry[] {
-  return JSON.parse(readFileSync(join(DRIVERS_DIR, 'index.json'), 'utf8'));
+  const indexPath = join(DRIVERS_DIR, 'index.json');
+  let vendorIdx: IndexEntry[];
+  try {
+    vendorIdx = JSON.parse(readFileSync(indexPath, 'utf8'));
+  } catch {
+    vendorIdx = JSON.parse(readFileSync(join(VENDOR_DRIVERS_DIR, 'index.json'), 'utf8'));
+    writeFileSync(indexPath, JSON.stringify(vendorIdx));
+  }
+  // Ensure all .wdr files exist in user data dir (copy from vendor if missing)
+  const firstEntry = vendorIdx[0];
+  if (firstEntry) {
+    const firstDst = join(DRIVERS_DIR, firstEntry.file);
+    try { readFileSync(firstDst); } catch {
+      // First .wdr missing -> copy all from vendor
+      for (const entry of vendorIdx) {
+        const src = join(VENDOR_DRIVERS_DIR, entry.file);
+        const dst = join(DRIVERS_DIR, entry.file);
+        try { writeFileSync(dst, readFileSync(src)); } catch { /* ignore missing */ }
+      }
+    }
+  }
+  return vendorIdx;
 }
 
 export function searchDrivers(query: string, limit = 10) {
@@ -192,6 +237,7 @@ export interface SimulateInput {
   portLen_mm?: number;        // vented physical length; Fb then derived
   fmin?: number;
   fmax?: number;
+  filters?: Filter[];         // highpass/lowpass/linkwitz/peaking
 }
 
 const CURVE_POINTS = 60;
@@ -225,6 +271,7 @@ export function simulate(drv: Driver, input: SimulateInput): SimulateResult | { 
     fmin: input.fmin ?? 10,
     fmax: input.fmax ?? 1000,
     N: 400,
+    filters: input.filters,
   };
 
   let Fb: number | undefined;
@@ -337,24 +384,26 @@ export interface AddDriverInput extends FriendlyTS {
 }
 
 export function addDriver(input: AddDriverInput): { file: string; issues: DriverError[] } | { issues: DriverError[] } {
-  const { value: drv, errors } = deriveDriver(toRaw(input));
-  if (!drv) return { issues: errors };
-  // Build a minimal .wdr via upstream exporter (includes derived params + ParState)
-  const wdrText = toWdr(toRaw(input));
-  const safeName = (input.name || input.model || 'Custom').replace(/[^a-z0-9]+/gi, '_');
-  const file = `custom__${safeName}.wdr`;
-  writeFileSync(join(DRIVERS_DIR, file), wdrText);
-  // Append to index.json so it appears in search immediately
-  const idx = libraryIndex();
-  const newEntry: IndexEntry = {
-    file, name: input.name || input.model || 'Custom',
-    brand: input.brand || '', model: input.model || '',
-    Fs: drv.Fs, Qts: drv.Qts, Qes: drv.Qes, Vas: drv.Vas, Sd: drv.Sd, Re: drv.Re,
-    Xmax: drv.Xmax ?? null, Pe: drv.Pe ?? null,
-  };
-  writeFileSync(join(DRIVERS_DIR, 'index.json'), JSON.stringify([...idx, newEntry]));
-  // Re-verify it loads cleanly
-  const { driver: verify, issues: verifyIssues } = loadDriver(file);
-  if (!verify) return { issues: verifyIssues };
-  return { file, issues: verifyIssues };
+  return withLock(() => {
+    const { value: drv, errors } = deriveDriver(toRaw(input));
+    if (!drv) return { issues: errors };
+    // Build a minimal .wdr via upstream exporter (includes derived params + ParState)
+    const wdrText = toWdr(toRaw(input));
+    const safeName = (input.name || input.model || 'Custom').replace(/[^a-z0-9]+/gi, '_');
+    const file = `custom__${safeName}.wdr`;
+    writeFileSync(join(DRIVERS_DIR, file), wdrText);
+    // Append to index.json so it appears in search immediately
+    const idx = libraryIndex();
+    const newEntry: IndexEntry = {
+      file, name: input.name || input.model || 'Custom',
+      brand: input.brand || '', model: input.model || '',
+      Fs: drv.Fs, Qts: drv.Qts, Qes: drv.Qes, Vas: drv.Vas, Sd: drv.Sd, Re: drv.Re,
+      Xmax: drv.Xmax ?? null, Pe: drv.Pe ?? null,
+    };
+    writeFileSync(join(DRIVERS_DIR, 'index.json'), JSON.stringify([...idx, newEntry]));
+    // Re-verify it loads cleanly
+    const { driver: verify, issues: verifyIssues } = loadDriver(file);
+    if (!verify) return { issues: verifyIssues };
+    return { file, issues: verifyIssues };
+  });
 }

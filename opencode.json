@@ -1,8 +1,13 @@
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    ".opencode/plugins/graphify.js"
+  ],
+  "mcp": {
     "openisd-mcp": {
-      "command": "npx",
-      "args": ["openisd-mcp"]
+      "type": "local",
+      "command": ["npx", "-y", "openisd-mcp"],
+      "enabled": true
     }
   }
 }
