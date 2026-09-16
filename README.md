@@ -76,12 +76,6 @@ npm test
 - `classifyFinite` runs on every sweep — a NaN curve never reaches the agent.
 - Self-test at startup mirrors OpenISD's AD-5: golden SPL match (<0.1 dB), vented sweep finite, validation alive.
 
-## Publishing (maintainers)
-
-```bash
-npm version patch   # or minor/major
-git push --tags     # GitHub Action publish.yml publishes to npm (needs NPM_TOKEN secret)
-```
 
 ## License
 
